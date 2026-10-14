@@ -11,15 +11,24 @@ android {
         applicationId = "com.javi.yt2newpipe"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    // Clave fija (uso personal) para que cada versión nueva se instale encima de la anterior.
+    signingConfigs {
+        create("personal") {
+            storeFile = file("yt2np.jks")
+            storePassword = "yt2newpipe"
+            keyAlias = "yt2np"
+            keyPassword = "yt2newpipe"
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Firmado con la clave de debug para poder instalarlo directamente (uso personal).
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("personal")
         }
     }
 

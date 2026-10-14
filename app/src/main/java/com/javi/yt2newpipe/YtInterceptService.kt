@@ -21,6 +21,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.TextView
+import android.widget.Toast
 import kotlin.math.abs
 
 /**
@@ -241,22 +242,30 @@ class YtInterceptService : AccessibilityService() {
     private fun labelOf(n: AccessibilityNodeInfo): List<String> =
         listOfNotNull(n.text?.toString()?.trim(), n.contentDescription?.toString()?.trim())
 
+    /**
+     * Coincide si la etiqueta es el texto exacto o empieza por él con poco más
+     * (p. ej. "Compartir vídeo"), pero no con títulos largos que lo contengan.
+     */
     private fun findExact(roots: List<AccessibilityNodeInfo>, texts: List<String>): AccessibilityNodeInfo? =
-        find(roots, texts) { label, t -> label.equals(t, ignoreCase = true) }
+        find(roots) { label ->
+            texts.any { t -> label.equals(t, true) || (label.startsWith(t, true) && label.length <= t.length + 20) }
+        }
 
     private fun findPrefix(roots: List<AccessibilityNodeInfo>, texts: List<String>): AccessibilityNodeInfo? =
-        find(roots, texts) { label, t -> label.startsWith(t, ignoreCase = true) }
+        find(roots) { label -> texts.any { label.startsWith(it, ignoreCase = true) } }
 
-    private inline fun find(
-        roots: List<AccessibilityNodeInfo>,
-        texts: List<String>,
-        match: (String, String) -> Boolean,
-    ): AccessibilityNodeInfo? {
-        for (root in roots) for (t in texts) {
-            val nodes = try { root.findAccessibilityNodeInfosByText(t) } catch (_: Exception) { null } ?: continue
-            for (n in nodes) {
-                if (!n.isVisibleToUser) continue
-                if (labelOf(n).any { match(it, t) }) return n
+    /** Recorre todo el árbol (findAccessibilityNodeInfosByText no ve algunas vistas de YouTube). */
+    private fun find(roots: List<AccessibilityNodeInfo>, match: (String) -> Boolean): AccessibilityNodeInfo? {
+        var visited = 0
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        roots.forEach { stack.addLast(it) }
+        while (stack.isNotEmpty() && visited < 4000) {
+            val n = stack.removeLast()
+            visited++
+            if (n.isVisibleToUser && labelOf(n).any { it.isNotEmpty() && match(it) }) return n
+            for (i in n.childCount - 1 downTo 0) {
+                val c = try { n.getChild(i) } catch (_: Exception) { null } ?: continue
+                stack.addLast(c)
             }
         }
         return null
@@ -284,10 +293,16 @@ class YtInterceptService : AccessibilityService() {
 
     /** Guarda lo que hay en pantalla para poder ajustar los textos si YouTube cambia. */
     fun saveDiagnostic(reason: String) {
-        val sb = StringBuilder("Motivo: $reason\n")
+        val sb = StringBuilder("Motivo: $reason\nEstado: $state, armado: $armed, YT delante: $ytForeground\n")
+        try {
+            for (w in windows) sb.append("Ventana tipo=${w.type} capa=${w.layer} activa=${w.isActive} ")
+                .append("pkg=${w.root?.packageName}\n")
+        } catch (_: Exception) { }
+        val share = findExact(youtubeRoots(), YtTexts.SHARE)
+        sb.append("Botón Compartir encontrado: ${share != null}\n\n")
         var count = 0
         fun walk(n: AccessibilityNodeInfo?, d: Int) {
-            if (n == null || count > 500) return
+            if (n == null || count > 700) return
             count++
             val lbl = labelOf(n).filter { it.isNotEmpty() }.joinToString(" | ")
             val id = n.viewIdResourceName?.substringAfter(":id/") ?: ""
@@ -297,11 +312,15 @@ class YtInterceptService : AccessibilityService() {
                     .append(if (id.isNotEmpty()) " #$id" else "")
                     .append(if (lbl.isNotEmpty()) " «$lbl»" else "")
                     .append(if (n.isClickable) " [click]" else "")
+                    .append(if (!n.isVisibleToUser) " [oculto]" else "")
                     .append('\n')
             }
             for (i in 0 until n.childCount) walk(n.getChild(i), d + 1)
         }
-        youtubeRoots().forEach { walk(it, 0) }
+        val roots = youtubeRoots().ifEmpty {
+            try { windows.mapNotNull { it.root } } catch (_: Exception) { emptyList() }
+        }
+        roots.forEach { walk(it, 0) }
         Prefs.setLastDiag(this, sb.toString())
         Log.i(TAG, sb.toString())
     }
@@ -341,21 +360,33 @@ class YtInterceptService : AccessibilityService() {
         }
 
         var downX = 0f; var downY = 0f; var startX = 0; var startY = 0; var moved = false
+        var longPressed = false
+        val longPress = Runnable {
+            longPressed = true
+            saveDiagnostic("Captura manual (pulsación larga en el botón)")
+            Toast.makeText(this, "Diagnóstico guardado. Ábrelo en la app YT → NewPipe.", Toast.LENGTH_LONG).show()
+        }
         tv.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = e.rawX; downY = e.rawY; startX = lp.x; startY = lp.y; moved = false
+                    longPressed = false
+                    handler.postDelayed(longPress, 700)
                 }
+                MotionEvent.ACTION_CANCEL -> handler.removeCallbacks(longPress)
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - downX; val dy = e.rawY - downY
                     if (abs(dx) > dp(6) || abs(dy) > dp(6)) moved = true
                     if (moved) {
+                        handler.removeCallbacks(longPress)
                         lp.x = startX + dx.toInt(); lp.y = startY + dy.toInt()
                         wm.updateViewLayout(tv, lp)
                     }
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (moved) Prefs.setOverlayPos(this, lp.x, lp.y)
+                    handler.removeCallbacks(longPress)
+                    if (longPressed) Unit
+                    else if (moved) Prefs.setOverlayPos(this, lp.x, lp.y)
                     else {
                         Prefs.setEnabled(this, !Prefs.enabled(this))
                         state = State.IDLE
