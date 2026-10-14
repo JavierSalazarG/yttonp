@@ -49,15 +49,25 @@ class YtInterceptService : AccessibilityService() {
         private const val CLIPBOARD_TIMEOUT_MS = 3500L
         private const val RETRIGGER_GUARD_MS = 1500L
 
+        /** Margen tras abrir el vídeo por si aparece un anuncio. */
+        private const val SETTLE_MS = 350L
+        /** Margen tras desaparecer el anuncio para que YouTube cargue el vídeo real. */
+        private const val AFTER_AD_MS = 500L
+        private const val AD_POLL_MS = 100L
+        private const val AD_TIMEOUT_MS = 90_000L
+
         @Volatile var instance: YtInterceptService? = null
             private set
     }
 
-    private enum class State { IDLE, WAIT_COPY_LINK, WAIT_CLIPBOARD }
+    private enum class State { IDLE, WAIT_AD, WAIT_COPY_LINK, WAIT_CLIPBOARD }
 
     private val handler = Handler(Looper.getMainLooper())
     private var state = State.IDLE
     private var stateDeadline = 0L
+
+    /** No pulsamos Compartir hasta este momento (margen tras abrir el vídeo o tras un anuncio). */
+    private var adSettleUntil = 0L
 
     /** Se "arma" cuando no hay reproductor en pantalla; así no se dispara en bucle. */
     private var armed = true
@@ -118,6 +128,7 @@ class YtInterceptService : AccessibilityService() {
         if (roots.isEmpty()) {
             // YouTube no está en pantalla; si esperábamos el panel, seguimos esperando hasta el timeout.
             if (state == State.WAIT_COPY_LINK) pollOrTimeout()
+            if (state == State.WAIT_AD) { state = State.IDLE; updateOverlayLook() }
             return
         }
         val now = SystemClock.uptimeMillis()
@@ -136,16 +147,59 @@ class YtInterceptService : AccessibilityService() {
                 }
                 if (armed && now - lastTriggerAt > RETRIGGER_GUARD_MS) {
                     armed = false
+                    shareTop = -1
+                    rememberShare(share)
                     lastTriggerAt = now
-                    Log.i(TAG, "Reproductor detectado → pulsando Compartir")
-                    click(share)
-                    state = State.WAIT_COPY_LINK
-                    stateDeadline = now + SHARE_PANEL_TIMEOUT_MS
-                    handler.postDelayed(scanRunnable, POLL_MS)
+                    Log.i(TAG, "Reproductor detectado → comprobando anuncios")
+                    // Un instante de margen: el anuncio a veces aparece justo después del reproductor.
+                    state = State.WAIT_AD
+                    adSettleUntil = now + SETTLE_MS
+                    stateDeadline = now + AD_TIMEOUT_MS
+                    updateOverlayLook()
+                    handler.postDelayed(scanRunnable, AD_POLL_MS)
+                }
+            }
+
+            State.WAIT_AD -> {
+                val share = findExact(roots, YtTexts.SHARE)
+                rememberShare(share)
+                when {
+                    share == null && !adVisible(roots) -> {
+                        // Has salido del reproductor: cancelamos.
+                        state = State.IDLE; armed = true; updateOverlayLook()
+                    }
+                    now > stateDeadline -> {
+                        Log.w(TAG, "El anuncio no terminó a tiempo")
+                        state = State.IDLE; updateOverlayLook()
+                    }
+                    adVisible(roots) -> {
+                        adSettleUntil = now + AFTER_AD_MS
+                        findSkip(roots)?.let { click(it) }
+                        handler.postDelayed(scanRunnable, AD_POLL_MS)
+                    }
+                    now < adSettleUntil || share == null -> handler.postDelayed(scanRunnable, AD_POLL_MS)
+                    else -> {
+                        Log.i(TAG, "Sin anuncio → pulsando Compartir")
+                        click(share)
+                        state = State.WAIT_COPY_LINK
+                        stateDeadline = now + SHARE_PANEL_TIMEOUT_MS
+                        updateOverlayLook()
+                        handler.postDelayed(scanRunnable, POLL_MS)
+                    }
                 }
             }
 
             State.WAIT_COPY_LINK -> {
+                if (adVisible(roots)) {
+                    // Empezó un anuncio con el panel abierto: lo cerramos y esperamos.
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    state = State.WAIT_AD
+                    adSettleUntil = now + AFTER_AD_MS
+                    stateDeadline = now + AD_TIMEOUT_MS
+                    updateOverlayLook()
+                    handler.postDelayed(scanRunnable, AD_POLL_MS)
+                    return
+                }
                 val copy = findExact(roots, YtTexts.COPY_LINK)
                 if (copy != null) {
                     Log.i(TAG, "Pulsando Copiar enlace")
@@ -251,18 +305,55 @@ class YtInterceptService : AccessibilityService() {
             texts.any { t -> label.equals(t, true) || (label.startsWith(t, true) && label.length <= t.length + 20) }
         }
 
+    /** ¿Hay un anuncio en pantalla? (coincidencias estrictas para no confundir títulos como "Adele…"). */
+    private fun adVisible(roots: List<AccessibilityNodeInfo>): Boolean =
+        find(roots, maxTop = playerBottom()) { label ->
+            YtTexts.AD_EXACT.any { label.equals(it, true) } ||
+                YtTexts.AD_PREFIX.any { label.startsWith(it, true) }
+        } != null
+
+    /**
+     * Solo miramos anuncios por encima del botón Compartir (reproductor + título),
+     * para no confundir las tarjetas "Patrocinado" de la lista de relacionados.
+     */
+    private var shareTop = -1
+    private fun playerBottom(): Int =
+        if (shareTop > 0) shareTop else (resources.displayMetrics.heightPixels * 0.45f).toInt()
+
+    private fun rememberShare(share: AccessibilityNodeInfo?) {
+        if (share == null) return
+        val r = Rect().also { share.getBoundsInScreen(it) }
+        if (!r.isEmpty) shareTop = r.top
+    }
+
+    private fun findSkip(roots: List<AccessibilityNodeInfo>): AccessibilityNodeInfo? =
+        find(roots) { label ->
+            YtTexts.SKIP_EXACT.any { label.equals(it, true) } ||
+                // "Saltar anuncio" sí; "Saltar anuncio en 5" (cuenta atrás) no.
+                YtTexts.SKIP_PREFIX.any { label.startsWith(it, true) && !label.any(Char::isDigit) }
+        }
+
     private fun findPrefix(roots: List<AccessibilityNodeInfo>, texts: List<String>): AccessibilityNodeInfo? =
         find(roots) { label -> texts.any { label.startsWith(it, ignoreCase = true) } }
 
     /** Recorre todo el árbol (findAccessibilityNodeInfosByText no ve algunas vistas de YouTube). */
-    private fun find(roots: List<AccessibilityNodeInfo>, match: (String) -> Boolean): AccessibilityNodeInfo? {
+    private fun find(
+        roots: List<AccessibilityNodeInfo>,
+        maxTop: Int = Int.MAX_VALUE,
+        match: (String) -> Boolean,
+    ): AccessibilityNodeInfo? {
+        val r = Rect()
         var visited = 0
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         roots.forEach { stack.addLast(it) }
         while (stack.isNotEmpty() && visited < 4000) {
             val n = stack.removeLast()
             visited++
-            if (n.isVisibleToUser && labelOf(n).any { it.isNotEmpty() && match(it) }) return n
+            if (n.isVisibleToUser && labelOf(n).any { it.isNotEmpty() && match(it) }) {
+                if (maxTop == Int.MAX_VALUE) return n
+                n.getBoundsInScreen(r)
+                if (r.top < maxTop) return n
+            }
             for (i in n.childCount - 1 downTo 0) {
                 val c = try { n.getChild(i) } catch (_: Exception) { null } ?: continue
                 stack.addLast(c)
@@ -405,7 +496,11 @@ class YtInterceptService : AccessibilityService() {
     private fun updateOverlayLook() {
         val tv = overlay ?: return
         val on = Prefs.enabled(this)
-        tv.text = if (on) "NewPipe ●" else "NewPipe ○"
+        tv.text = when {
+            !on -> "NewPipe ○"
+            state == State.WAIT_AD -> "NewPipe · anuncio…"
+            else -> "NewPipe ●"
+        }
         tv.background = GradientDrawable().apply {
             cornerRadius = dp(16).toFloat()
             setColor(if (on) 0xE0C62828.toInt() else 0xB0424242.toInt())
