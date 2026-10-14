@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">YT → NewPipe</string>
+    <string name="service_label">YT → NewPipe</string>
+    <string name="service_description">Cuando tocas un vídeo en YouTube, copia su enlace y lo abre en NewPipe. Solo actúa dentro de la app de YouTube.</string>
+</resources>
