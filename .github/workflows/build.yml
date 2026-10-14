@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -19,7 +22,17 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           chmod +x gradlew
           ./gradlew --no-daemon assembleRelease
+      - name: Renombrar APK
+        run: cp app/build/outputs/apk/release/app-release.apk YT2NewPipe.apk
       - uses: actions/upload-artifact@v5
         with:
           name: YT2NewPipe-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: YT2NewPipe.apk
+      # Publica el APK como descarga directa en la sección "Releases" (siempre la última versión).
+      - name: Publicar descarga
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest YT2NewPipe.apk --title "YT → NewPipe (última versión)" \
+            --notes "Compilado desde ${GITHUB_SHA::7}. Descarga YT2NewPipe.apk e instálalo."
