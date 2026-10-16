@@ -8,11 +8,15 @@ import android.graphics.Color
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -78,6 +82,9 @@ class YtInterceptService : AccessibilityService() {
         private set
 
     private var ytForeground = false
+    private var npForeground = false
+    private var homePending = false
+    private var homeDeadline = 0L
     private var overlay: TextView? = null
     private var scanScheduled = false
     private var lastScanAt = 0L
@@ -102,9 +109,12 @@ class YtInterceptService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         val type = event.eventType
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
-            val fg = youtubeOnTop()
-            if (fg != ytForeground) {
-                ytForeground = fg
+            val top = topAppPackage()
+            val yt = top == YT
+            val np = top != null && top in Prefs.TARGETS
+            if (yt != ytForeground || np != npForeground) {
+                ytForeground = yt
+                npForeground = np
                 refreshOverlay()
             }
         }
@@ -150,6 +160,7 @@ class YtInterceptService : AccessibilityService() {
         val s = Screen.read(roots, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
 
         if (pendingCleanup && state == State.IDLE) { cleanup(s, now); return }
+        if (homePending && state == State.IDLE) { goHomeStep(s, now); return }
 
         when (state) {
             State.IDLE -> {
@@ -294,6 +305,20 @@ class YtInterceptService : AccessibilityService() {
         if (now - noPlayerSince > 800) finishCleanup() else requestScan(120)
     }
 
+    /** Tras volver desde el botón de NewPipe: pulsa la pestaña Inicio. */
+    private fun goHomeStep(s: Screen, now: Long) {
+        if (now > homeDeadline) { homePending = false; return }
+        if (!activeWindowIsYoutube()) { requestScan(150); return }
+        if (s.share != null && now - lastBackAt > 400) {
+            lastBackAt = now
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            requestScan(200)
+            return
+        }
+        val home = s.home
+        if (home != null) { click(home); homePending = false } else requestScan(150)
+    }
+
     private fun finishCleanup() {
         pendingCleanup = false
         armed = true
@@ -326,23 +351,23 @@ class YtInterceptService : AccessibilityService() {
 
     // ================================================================ ventanas y nodos
 
-    /** ¿La app que está delante (ignorando teclados, barras y ventanas flotantes) es YouTube? */
-    private fun youtubeOnTop(): Boolean = try {
+    /** App que está delante, ignorando teclados, barras, la nuestra y ventanas flotantes. */
+    private fun topAppPackage(): String? = try {
         val r = Rect()
         val minH = resources.displayMetrics.heightPixels / 2
-        var result = false
+        var result: String? = null
         for (w in windows) { // de arriba abajo
             if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
             val pkg = w.root?.packageName?.toString() ?: continue
             if (pkg == packageName) continue
             w.getBoundsInScreen(r)
             if (r.height() < minH) continue // ventanas flotantes (popup de NewPipe, etc.)
-            result = pkg == YT
+            result = pkg
             break
         }
         result
     } catch (_: Exception) {
-        rootInActiveWindow?.packageName?.toString() == YT
+        rootInActiveWindow?.packageName?.toString()
     }
 
     private fun activeWindowIsYoutube() = rootInActiveWindow?.packageName?.toString() == YT
@@ -366,6 +391,7 @@ class YtInterceptService : AccessibilityService() {
         val shareRect = Rect()
         var copyLink: AccessibilityNodeInfo? = null
         var closeMini: AccessibilityNodeInfo? = null
+        var home: AccessibilityNodeInfo? = null
         var skip: AccessibilityNodeInfo? = null
         var skipTop = Int.MAX_VALUE
         val adTops = ArrayList<Int>()
@@ -429,6 +455,10 @@ class YtInterceptService : AccessibilityService() {
                                 (pre(l, YtTexts.SKIP_PREFIX) && l.none(Char::isDigit)))
                         ) {
                             s.skip = n; n.getBoundsInScreen(r); s.skipTop = r.top
+                        }
+                        if (s.home == null && eq(l, YtTexts.HOME)) {
+                            n.getBoundsInScreen(r)
+                            if (r.top > h * 0.8f) s.home = n
                         }
                         if (s.closeMini == null) {
                             if (pre(l, YtTexts.CLOSE_MINIPLAYER)) s.closeMini = n
@@ -516,12 +546,23 @@ class YtInterceptService : AccessibilityService() {
         Log.i(TAG, sb.toString())
     }
 
-    // ================================================================ botón flotante
+    // ================================================================ botones flotantes
+
+    private enum class Mode { NONE, YOUTUBE, NEWPIPE }
+    private var overlayMode = Mode.NONE
 
     /** Llamado también desde MainActivity y el mosaico de ajustes rápidos. */
     fun refreshOverlay() {
         handler.post {
-            if (ytForeground && Prefs.overlay(this)) showOverlay() else removeOverlay()
+            val want = when {
+                ytForeground && Prefs.overlay(this) -> Mode.YOUTUBE
+                npForeground && Prefs.backButton(this) -> Mode.NEWPIPE
+                else -> Mode.NONE
+            }
+            if (want != overlayMode) {
+                removeOverlay()
+                if (want != Mode.NONE) showOverlay(want)
+            }
             updateOverlayLook()
         }
     }
@@ -532,14 +573,24 @@ class YtInterceptService : AccessibilityService() {
         refreshOverlay()
     }
 
+    /** Desde NewPipe: vuelve a YouTube, cierra su reproductor y pulsa la pestaña Inicio. */
+    private fun goYoutubeHome() {
+        val i = packageManager.getLaunchIntentForPackage(YT)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) ?: return
+        state = State.IDLE
+        pendingCleanup = true
+        cleanupStartedAt = 0; cleanupBacks = 0; noPlayerSince = 0
+        homePending = true
+        homeDeadline = SystemClock.uptimeMillis() + 5000
+        try { startActivity(i) } catch (e: Exception) { Log.e(TAG, "abrir YouTube", e) }
+    }
+
     private fun dp(v: Int) =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun showOverlay() {
-        if (overlay != null) return
+    private fun showOverlay(mode: Mode) {
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        val (x, y) = Prefs.overlayPos(this)
+        val (x, y) = if (mode == Mode.YOUTUBE) Prefs.overlayPos(this) else Prefs.backPos(this)
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -551,14 +602,16 @@ class YtInterceptService : AccessibilityService() {
             this.x = x; this.y = y
         }
         val tv = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 11f
-            setPadding(dp(9), dp(4), dp(9), dp(4))
+            textSize = 12.5f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setPadding(dp(12), dp(7), dp(14), dp(7))
+            elevation = dp(4).toFloat()
         }
 
         var downX = 0f; var downY = 0f; var startX = 0; var startY = 0
         var moved = false; var longPressed = false
         val longPress = Runnable {
+            if (mode != Mode.YOUTUBE) return@Runnable
             longPressed = true
             saveDiagnostic("Captura manual (pulsación larga en el botón)")
             Toast.makeText(this, "Diagnóstico guardado. Ábrelo en la app YT → NewPipe.", Toast.LENGTH_LONG).show()
@@ -568,6 +621,7 @@ class YtInterceptService : AccessibilityService() {
                 MotionEvent.ACTION_DOWN -> {
                     downX = e.rawX; downY = e.rawY; startX = lp.x; startY = lp.y
                     moved = false; longPressed = false
+                    tv.alpha = 0.75f
                     handler.postDelayed(longPress, 700)
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -576,15 +630,18 @@ class YtInterceptService : AccessibilityService() {
                     if (moved) {
                         handler.removeCallbacks(longPress)
                         lp.x = startX + dx.toInt(); lp.y = startY + dy.toInt()
-                        wm.updateViewLayout(tv, lp)
+                        try { wm.updateViewLayout(tv, lp) } catch (_: Exception) { }
                     }
                 }
-                MotionEvent.ACTION_CANCEL -> handler.removeCallbacks(longPress)
+                MotionEvent.ACTION_CANCEL -> { tv.alpha = 1f; handler.removeCallbacks(longPress) }
                 MotionEvent.ACTION_UP -> {
+                    tv.alpha = 1f
                     handler.removeCallbacks(longPress)
                     when {
                         longPressed -> Unit
-                        moved -> Prefs.setOverlayPos(this, lp.x, lp.y)
+                        moved -> if (mode == Mode.YOUTUBE) Prefs.setOverlayPos(this, lp.x, lp.y)
+                                 else Prefs.setBackPos(this, lp.x, lp.y)
+                        mode == Mode.NEWPIPE -> goYoutubeHome()
                         else -> {
                             Prefs.setEnabled(this, !Prefs.enabled(this))
                             QuickTile.requestUpdate(this)
@@ -595,28 +652,39 @@ class YtInterceptService : AccessibilityService() {
             }
             true
         }
-        wm.addView(tv, lp)
+        try { wm.addView(tv, lp) } catch (e: Exception) { Log.e(TAG, "overlay", e); return }
         overlay = tv
+        overlayMode = mode
         updateOverlayLook()
     }
 
     private fun updateOverlayLook() {
         val tv = overlay ?: return
-        val on = Prefs.enabled(this)
-        val (text, color) = when {
-            !on -> "NewPipe ○" to 0xB0424242.toInt()
-            state == State.WAIT_AD -> "Anuncio… ⏳" to 0xE0EF6C00.toInt()
-            state != State.IDLE -> "NewPipe ➜" to 0xE0C62828.toInt()
-            else -> "NewPipe ●" to 0xE0C62828.toInt()
+        val dot = "\u25CF  "
+        val (label, dotColor) = when {
+            overlayMode == Mode.NEWPIPE -> "YouTube" to 0xFFFF3B30.toInt()
+            !Prefs.enabled(this) -> "En pausa" to 0xFF8E8E93.toInt()
+            state == State.WAIT_AD -> "Anuncio…" to 0xFFFFA000.toInt()
+            state != State.IDLE -> "Abriendo…" to 0xFF34C759.toInt()
+            else -> "NewPipe" to 0xFFFF3B30.toInt()
         }
-        tv.text = text
-        tv.background = GradientDrawable().apply { cornerRadius = dp(14).toFloat(); setColor(color) }
+        val prefix = if (overlayMode == Mode.NEWPIPE) "\u25B6  " else dot
+        tv.text = SpannableString(prefix + label).apply {
+            setSpan(ForegroundColorSpan(dotColor), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        tv.setTextColor(Color.WHITE)
+        tv.background = GradientDrawable().apply {
+            cornerRadius = dp(20).toFloat()
+            setColor(0xD91C1C1E.toInt())
+            setStroke(dp(1), 0x1FFFFFFF)
+        }
     }
 
     private fun removeOverlay() {
-        val tv = overlay ?: return
-        try { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(tv) } catch (_: Exception) { }
+        val tv = overlay
+        if (tv != null) try { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(tv) } catch (_: Exception) { }
         overlay = null
+        overlayMode = Mode.NONE
     }
 }
 

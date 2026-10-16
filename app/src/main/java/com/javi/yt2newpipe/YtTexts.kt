@@ -44,4 +44,7 @@ object YtTexts {
         "Close miniplayer", "Close the miniplayer", "Close player",
     )
     val CLOSE_EXACT = listOf("Cerrar", "Close")
+
+    /** Pestaña "Inicio" de la barra inferior. */
+    val HOME = listOf("Inicio", "Home", "Accueil", "Startseite", "Início")
 }

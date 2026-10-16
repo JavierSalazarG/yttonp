@@ -40,6 +40,13 @@ object Prefs {
     fun mutedByUs(c: Context) = sp(c).getBoolean("mutedByUs", false)
     fun setMutedByUs(c: Context, v: Boolean) = sp(c).edit().putBoolean("mutedByUs", v).apply()
 
+    /** Botón flotante "YouTube" mientras estás en NewPipe. */
+    fun backButton(c: Context) = sp(c).getBoolean("backBtn", true)
+    fun setBackButton(c: Context, v: Boolean) = sp(c).edit().putBoolean("backBtn", v).apply()
+
+    fun backPos(c: Context): Pair<Int, Int> = sp(c).getInt("bx", 0) to sp(c).getInt("by", 600)
+    fun setBackPos(c: Context, x: Int, y: Int) = sp(c).edit().putInt("bx", x).putInt("by", y).apply()
+
     fun target(c: Context): String = sp(c).getString("target", "org.schabi.newpipe")!!
     fun setTarget(c: Context, v: String) = sp(c).edit().putString("target", v).apply()
 
