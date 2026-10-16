@@ -15,7 +15,9 @@ object Prefs {
         "org.polymorphicshade.newpipe" to "NewPipe SponsorBlock (antiguo)",
     )
 
-    private fun sp(c: Context): SharedPreferences = c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    private var cache: SharedPreferences? = null
+    private fun sp(c: Context): SharedPreferences =
+        cache ?: c.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE).also { cache = it }
 
     fun enabled(c: Context) = sp(c).getBoolean("enabled", true)
     fun setEnabled(c: Context, v: Boolean) = sp(c).edit().putBoolean("enabled", v).apply()
@@ -25,6 +27,18 @@ object Prefs {
 
     fun closeYoutubePlayer(c: Context) = sp(c).getBoolean("closeYt", true)
     fun setCloseYoutubePlayer(c: Context, v: Boolean) = sp(c).edit().putBoolean("closeYt", v).apply()
+
+    /** Mandar también los Shorts a NewPipe (por defecto no: se ven en YouTube). */
+    fun shorts(c: Context) = sp(c).getBoolean("shorts", false)
+    fun setShorts(c: Context, v: Boolean) = sp(c).edit().putBoolean("shorts", v).apply()
+
+    /** Silenciar YouTube mientras se pasa el vídeo (y durante los anuncios). */
+    fun mute(c: Context) = sp(c).getBoolean("mute", true)
+    fun setMute(c: Context, v: Boolean) = sp(c).edit().putBoolean("mute", v).apply()
+
+    /** Marca de seguridad: si la app se cierra con el audio silenciado, lo restauramos al volver. */
+    fun mutedByUs(c: Context) = sp(c).getBoolean("mutedByUs", false)
+    fun setMutedByUs(c: Context, v: Boolean) = sp(c).edit().putBoolean("mutedByUs", v).apply()
 
     fun target(c: Context): String = sp(c).getString("target", "org.schabi.newpipe")!!
     fun setTarget(c: Context, v: String) = sp(c).edit().putString("target", v).apply()

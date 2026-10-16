@@ -11,8 +11,8 @@ android {
         applicationId = "com.javi.yt2newpipe"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "2.0"
     }
 
     // Clave fija (uso personal) para que cada versión nueva se instale encima de la anterior.

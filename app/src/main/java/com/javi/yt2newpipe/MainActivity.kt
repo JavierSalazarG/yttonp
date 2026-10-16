@@ -71,7 +71,13 @@ class MainActivity : Activity() {
         }
 
         title("2. Comportamiento")
-        switch("Mandar vídeos a NewPipe", Prefs.enabled(this)) { Prefs.setEnabled(this, it) }
+        switch("Mandar vídeos a NewPipe", Prefs.enabled(this)) {
+            Prefs.setEnabled(this, it); YtInterceptService.instance?.onToggled(); QuickTile.requestUpdate(this)
+        }
+        switch("Mandar también los Shorts", Prefs.shorts(this)) { Prefs.setShorts(this, it) }
+        switch("Silenciar YouTube mientras pasa el vídeo y durante los anuncios", Prefs.mute(this)) {
+            Prefs.setMute(this, it)
+        }
         switch("Botón flotante en YouTube (tócalo para activar/desactivar; arrástralo para moverlo)",
             Prefs.overlay(this)) { Prefs.setOverlay(this, it) }
         switch("Cerrar el reproductor de YouTube al volver", Prefs.closeYoutubePlayer(this)) {
@@ -80,6 +86,18 @@ class MainActivity : Activity() {
 
         title("3. Abrir en")
         targets = RadioGroup(this).also(col::addView)
+
+        title("Consejos")
+        note(
+            "• Lo más cómodo: en NewPipe → Ajustes → Comportamiento → \"Acción preferida al abrir\" " +
+                "→ \"Reproductor emergente\". El vídeo se abre en una ventanita flotante y sigues " +
+                "navegando por YouTube sin salir.\n\n" +
+                "• Interruptor rápido: baja la cortinilla → lápiz (editar) → arrastra \"YT → NewPipe\" " +
+                "a tus ajustes rápidos.\n\n" +
+                "• Botón flotante en YouTube: tócalo para pausar/activar, arrástralo para moverlo y " +
+                "mantenlo pulsado para guardar un diagnóstico.\n\n" +
+                "• Los Shorts y las playlists se quedan en YouTube."
+        )
 
         title("Diagnóstico")
         note(

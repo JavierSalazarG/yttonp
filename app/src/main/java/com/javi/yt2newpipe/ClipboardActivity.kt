@@ -39,7 +39,7 @@ class ClipboardActivity : Activity() {
         val url = readFreshUrl()
         when {
             url != null -> openInNewPipe(url)
-            ++attempts < 20 -> handler.postDelayed({ tryRead() }, 75) // hasta ~1,5 s
+            ++attempts < 40 -> handler.postDelayed({ tryRead() }, 40) // hasta ~1,6 s
             else -> finishWith(false, "No encontré el enlace en el portapapeles")
         }
     }
@@ -58,6 +58,8 @@ class ClipboardActivity : Activity() {
     }
 
     private fun openInNewPipe(url: String) {
+        // Segunda red de seguridad para Shorts (normalmente ya se filtran antes).
+        if (url.contains("/shorts/") && !Prefs.shorts(this)) { finishWith(false, null); return }
         val preferred = Prefs.target(this)
         val candidates = listOf(preferred) + Prefs.TARGETS.keys.filter { it != preferred }
         for (pkg in candidates) {
