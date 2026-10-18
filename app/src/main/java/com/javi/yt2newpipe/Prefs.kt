@@ -40,6 +40,10 @@ object Prefs {
     fun mutedByUs(c: Context) = sp(c).getBoolean("mutedByUs", false)
     fun setMutedByUs(c: Context, v: Boolean) = sp(c).edit().putBoolean("mutedByUs", v).apply()
 
+    /** Historial de YouTube: 0 = no, 1 = entra en el historial, 2 = además marcado como visto. */
+    fun historyMode(c: Context) = sp(c).getInt("history", 2)
+    fun setHistoryMode(c: Context, v: Int) = sp(c).edit().putInt("history", v).apply()
+
     /** Botón flotante "YouTube" mientras estás en NewPipe. */
     fun backButton(c: Context) = sp(c).getBoolean("backBtn", true)
     fun setBackButton(c: Context, v: Boolean) = sp(c).edit().putBoolean("backBtn", v).apply()

@@ -129,6 +129,38 @@ class MainActivity : Activity() {
         }
         col.addView(settings)
 
+        // ---------------------------------------------------------- historial
+        col.addView(section("Historial de YouTube"))
+        val history = card()
+        val hRadios = ArrayList<RadioButton>()
+        listOf(
+            Triple(2, "Marcar como visto", "YouTube lo reproduce en silencio y salta casi al final · ~4 s"),
+            Triple(1, "Solo añadir al historial", "YouTube lo reproduce en silencio un momento · ~2,5 s"),
+            Triple(0, "No registrar", "Lo más rápido; YouTube no se entera de lo que ves"),
+        ).forEachIndexed { i, (mode, t, d) ->
+            val rb = RadioButton(this).apply {
+                text = t
+                textSize = 15.5f
+                setTextColor(ink)
+                isChecked = Prefs.historyMode(this@MainActivity) == mode
+                buttonTintList = ColorStateList.valueOf(accent)
+                setPadding(dp(10), 0, 0, 0)
+            }
+            hRadios += rb
+            rb.setOnClickListener {
+                Prefs.setHistoryMode(this, mode)
+                hRadios.forEach { o -> o.isChecked = o === rb }
+            }
+            history.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(10), dp(18), dp(10))
+                addView(rb)
+                addView(text(d, 13f, sub).apply { setPadding(dp(46), 0, 0, dp(2)) })
+            })
+            if (i < 2) history.addView(divider())
+        }
+        col.addView(history)
+
         // ---------------------------------------------------------- destino
         col.addView(section("Abrir en"))
         targetsCard = card()

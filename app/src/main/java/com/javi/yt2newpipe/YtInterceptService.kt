@@ -11,6 +11,7 @@ import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -54,6 +55,8 @@ class YtInterceptService : AccessibilityService() {
         private const val HANDOFF_TIMEOUT_MS = 4000L
         private const val CLEANUP_TIMEOUT_MS = 3000L
         private const val MAX_NODES = 2500
+        private const val HISTORY_MS = 2500L          // reproducción en YouTube para que entre en el historial
+        private const val AFTER_SEEK_MS = 1500L       // tras saltar al final, para que YouTube guarde el progreso
 
         @Volatile var instance: YtInterceptService? = null
             private set
@@ -85,6 +88,8 @@ class YtInterceptService : AccessibilityService() {
     private var npForeground = false
     private var homePending = false
     private var homeDeadline = 0L
+    private var registering = false
+    private var handoffToken = 0
     private var overlay: TextView? = null
     private var scanScheduled = false
     private var lastScanAt = 0L
@@ -207,12 +212,7 @@ class YtInterceptService : AccessibilityService() {
                         copyRequestedAt = System.currentTimeMillis()
                         click(s.copyLink!!)
                         state = State.HANDOFF
-                        stateDeadline = now + HANDOFF_TIMEOUT_MS
-                        updateOverlayLook()
-                        // YouTube escribe el enlace y cierra el panel; mientras, pausamos y abrimos NewPipe.
-                        handler.postDelayed({ pauseMedia(); launchClipboardActivity() }, 40)
-                        handler.postDelayed({ if (state == State.HANDOFF) { Log.w(TAG, "Timeout"); reset() } },
-                            HANDOFF_TIMEOUT_MS)
+                        startHandoff(now)
                     }
                     now > stateDeadline -> {
                         saveDiagnostic("No apareció 'Copiar enlace' tras pulsar Compartir")
@@ -222,8 +222,94 @@ class YtInterceptService : AccessibilityService() {
                 }
             }
 
-            State.HANDOFF -> Unit
+            State.HANDOFF -> {
+                // Si te vas de YouTube mientras registra el historial, cancelamos.
+                if (registering && !ytForeground) { registering = false; reset() }
+            }
         }
+    }
+
+    /**
+     * Tras copiar el enlace. Según el ajuste de historial:
+     *  0 → pausa y abre NewPipe al momento.
+     *  1 → deja que YouTube reproduzca (en silencio) unos segundos para que entre en tu historial.
+     *  2 → además salta casi al final para que YouTube lo marque como visto.
+     */
+    private fun startHandoff(now: Long) {
+        val mode = Prefs.historyMode(this)
+        val extra = when (mode) { 1 -> HISTORY_MS; 2 -> HISTORY_MS + AFTER_SEEK_MS + 400; else -> 0L }
+        val token = ++handoffToken
+        stateDeadline = now + HANDOFF_TIMEOUT_MS + extra
+        registering = mode != 0
+        updateOverlayLook()
+        handler.postDelayed({
+            if (state == State.HANDOFF && handoffToken == token) { Log.w(TAG, "Timeout"); reset() }
+        }, HANDOFF_TIMEOUT_MS + extra)
+
+        val go = Runnable {
+            if (state != State.HANDOFF || handoffToken != token) return@Runnable
+            registering = false
+            updateOverlayLook()
+            pauseMedia()
+            launchClipboardActivity()
+        }
+        when (mode) {
+            0 -> handler.postDelayed(go, 40)
+            1 -> handler.postDelayed(go, HISTORY_MS)
+            else -> handler.postDelayed({
+                if (state != State.HANDOFF || handoffToken != token) return@postDelayed
+                seekNearEnd(retry = true)
+                handler.postDelayed(go, AFTER_SEEK_MS)
+            }, HISTORY_MS)
+        }
+    }
+
+    /** Mueve la barra de progreso de YouTube al 96 % (sin llegar al final para que no salte al siguiente). */
+    private fun seekNearEnd(retry: Boolean) {
+        val bar = findSeekBar()
+        if (bar != null) {
+            val ri = bar.rangeInfo
+            val target = ri.min + (ri.max - ri.min) * 0.96f
+            val ok = bar.performAction(
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id,
+                Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, target) }
+            )
+            Log.i(TAG, "Saltar al final: $ok")
+            if (ok) return
+        }
+        if (!retry) return
+        // Los controles están ocultos: un toque en el vídeo los muestra (no lo pausa) y reintentamos.
+        val w = resources.displayMetrics.widthPixels.toFloat()
+        val top = youtubeRoots().firstOrNull()?.let { r -> Rect().also { r.getBoundsInScreen(it) }.top } ?: 0
+        val p = Path().apply { moveTo(w / 2f, top + w * 9f / 32f) }
+        dispatchGesture(
+            GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(p, 0, 40)).build(),
+            null, null
+        )
+        handler.postDelayed({ if (state == State.HANDOFF) seekNearEnd(retry = false) }, 350)
+    }
+
+    private fun findSeekBar(): AccessibilityNodeInfo? {
+        var best: AccessibilityNodeInfo? = null
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        youtubeRoots().forEach { stack.addLast(it) }
+        var visited = 0
+        while (stack.isNotEmpty() && visited < MAX_NODES) {
+            val n = stack.removeLast(); visited++
+            val ri = n.rangeInfo
+            if (ri != null && ri.max > ri.min &&
+                n.actionList.contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS)
+            ) {
+                val id = n.viewIdResourceName ?: ""
+                if (id.contains("time_bar") || id.contains("seek")) return n
+                if (best == null) best = n
+            }
+            for (i in n.childCount - 1 downTo 0) {
+                val c = try { n.getChild(i) } catch (_: Exception) { null } ?: continue
+                stack.addLast(c)
+            }
+        }
+        return best
     }
 
     private fun enterWaitAd(now: Long) {
@@ -246,6 +332,7 @@ class YtInterceptService : AccessibilityService() {
 
     private fun reset() {
         state = State.IDLE
+        registering = false
         unmute()
         updateOverlayLook()
     }
@@ -665,6 +752,7 @@ class YtInterceptService : AccessibilityService() {
             overlayMode == Mode.NEWPIPE -> "YouTube" to 0xFFFF3B30.toInt()
             !Prefs.enabled(this) -> "En pausa" to 0xFF8E8E93.toInt()
             state == State.WAIT_AD -> "Anuncio…" to 0xFFFFA000.toInt()
+            registering -> "Historial…" to 0xFF34C759.toInt()
             state != State.IDLE -> "Abriendo…" to 0xFF34C759.toInt()
             else -> "NewPipe" to 0xFFFF3B30.toInt()
         }
