@@ -87,7 +87,6 @@ class MainActivity : Activity() {
     private fun buildUi() {
         dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
-        setupSystemBars()
 
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -253,6 +252,8 @@ class MainActivity : Activity() {
             insets
         }
         setContentView(scroll)
+        // Después de setContentView: en algunos móviles (OnePlus/Oppo) la ventana aún no existe antes.
+        try { setupSystemBars() } catch (e: Exception) { android.util.Log.w("YT2NP", "barras", e) }
     }
 
     override fun onResume() {
@@ -432,7 +433,7 @@ class MainActivity : Activity() {
             window.setDecorFitsSystemWindows(false)
             val light = if (dark) 0 else
                 WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-            window.insetsController?.setSystemBarsAppearance(
+            window.decorView.windowInsetsController?.setSystemBarsAppearance(
                 light,
                 WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
             )
