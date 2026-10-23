@@ -52,8 +52,39 @@ class MainActivity : Activity() {
     private lateinit var diagText: TextView
     private lateinit var enabledSwitch: Switch
 
+    private var uiReady = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        try {
+            buildUi()
+            uiReady = true
+        } catch (t: Throwable) {
+            showError(t)
+        }
+    }
+
+    /** Si algo falla al abrir, en vez de cerrarse muestra el error para poder copiarlo. */
+    private fun showError(t: Throwable) {
+        val trace = "v${BuildConfigCompat.version(this)} · Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT}) · " +
+            "${Build.MANUFACTURER} ${Build.MODEL}\n\n" + android.util.Log.getStackTraceString(t)
+        Prefs.setLastDiag(this, "ERROR AL ABRIR\n$trace")
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val tv = TextView(this).apply {
+            text = "La app ha tenido un error. Toca aquí para copiarlo y pégaselo a Claude.\n\n$trace"
+            textSize = 12f
+            setTextIsSelectable(true)
+            setPadding(pad, pad * 4, pad, pad * 2)
+            setOnClickListener {
+                (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
+                    .setPrimaryClip(ClipData.newPlainText("error", trace))
+                Toast.makeText(this@MainActivity, "Copiado", Toast.LENGTH_SHORT).show()
+            }
+        }
+        setContentView(ScrollView(this).apply { addView(tv) })
+    }
+
+    private fun buildUi() {
         dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
         setupSystemBars()
@@ -226,6 +257,11 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (!uiReady) return
+        try { resumeUi() } catch (t: Throwable) { uiReady = false; showError(t) }
+    }
+
+    private fun resumeUi() {
         refreshStatus()
         enabledSwitch.isChecked = Prefs.enabled(this)
         renderTargets()

@@ -59,4 +59,6 @@ object Prefs {
 
     fun lastDiag(c: Context): String = sp(c).getString("diag", "") ?: ""
     fun setLastDiag(c: Context, v: String) = sp(c).edit().putString("diag", v.take(20000)).apply()
+    /** Versión síncrona: se usa justo antes de que la app se cierre por un error. */
+    fun setLastDiagNow(c: Context, v: String) = sp(c).edit().putString("diag", v.take(20000)).commit()
 }
