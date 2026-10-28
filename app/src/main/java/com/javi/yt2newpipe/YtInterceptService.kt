@@ -590,11 +590,12 @@ class YtInterceptService : AccessibilityService() {
 
     // ================================================================ diagnóstico
 
-    /** Guarda lo que hay en pantalla para poder ajustar los textos si YouTube cambia. */
+    /**
+     * Guarda lo que hay en pantalla de YouTube para poder ajustar los textos si YouTube cambia.
+     * Solo YouTube: de las demás ventanas apunta qué app es, nunca lo que muestran (mensajes, correos…).
+     */
     fun saveDiagnostic(reason: String) {
-        val roots = youtubeRoots().ifEmpty {
-            try { windows.mapNotNull { it.root } } catch (_: Exception) { emptyList() }
-        }
+        val roots = youtubeRoots()
         val dm = resources.displayMetrics
         val s = Screen.read(roots, dm.widthPixels, dm.heightPixels)
         val sb = StringBuilder("Motivo: $reason\n")
@@ -628,9 +629,11 @@ class YtInterceptService : AccessibilityService() {
             }
             for (i in 0 until n.childCount) walk(n.getChild(i), d + 1)
         }
+        if (roots.isEmpty()) sb.append("(YouTube no estaba en pantalla: no se guarda nada más)\n")
         roots.forEach { walk(it, 0) }
         Prefs.setLastDiag(this, sb.toString())
-        Log.i(TAG, sb.toString())
+        // Al registro del sistema solo el motivo: el contenido de la pantalla se queda en la app.
+        Log.i(TAG, "Diagnóstico guardado: $reason")
     }
 
     // ================================================================ botones flotantes

@@ -13,9 +13,16 @@ Tarda alrededor de medio segundo. En YouTube aparece un botón flotante **NewPip
 
 ## Conseguir el APK
 
-**Opción A – Android Studio:** abre esta carpeta, espera a que sincronice y pulsa ▶ con el móvil conectado, o usa *Build → Build APK(s)*.
+La firma usa una clave privada que **nunca** está en el repositorio (`~/.config/yttonp/keystore.properties`
+con `storeFile`, `storePassword`, `keyAlias` y `keyPassword`). Todas las versiones deben firmarse con la misma
+clave para instalarse encima de la anterior.
 
-**Opción B – sin instalar nada:** sube la carpeta a un repositorio de GitHub (puede ser privado). La pestaña *Actions* compila el APK automáticamente; descárgalo desde el artefacto **YT2NewPipe-apk** de la última ejecución.
+- **Desde el PC (la forma habitual):** `./gradlew assembleRelease` y `adb install -r app/build/outputs/apk/release/app-release.apk`.
+- **GitHub Actions** solo comprueba que compila. Si algún día quieres que publique el APK en *Releases*, añade
+  los Secrets `YTTONP_KEYSTORE_B64` (el `.jks` en base64) y `YTTONP_KEYSTORE_PASSWORD`; sin ellos no publica nada.
+
+Hasta la v2.4 la clave estaba en el repositorio (y sigue en su historial): ya no se usa. La v2.5 se firma con
+la nueva, así que hubo que desinstalar la versión anterior una vez.
 
 ## Puesta en marcha en el móvil
 

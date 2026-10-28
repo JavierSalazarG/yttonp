@@ -448,9 +448,10 @@ class MainActivity : Activity() {
     // ================================================================ utilidades
 
     private fun isServiceEnabled(): Boolean {
-        val me = ComponentName(this, YtInterceptService::class.java).flattenToString()
+        // Android lo guarda a veces abreviado ("paquete/.Clase"): se comparan componentes, no texto.
+        val me = ComponentName(this, YtInterceptService::class.java)
         val list = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
-        return list.split(':').any { it.equals(me, ignoreCase = true) }
+        return list.split(':').any { ComponentName.unflattenFromString(it.trim()) == me }
     }
 
     private fun isInstalled(pkg: String) = try {

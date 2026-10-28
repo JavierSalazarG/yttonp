@@ -17,19 +17,40 @@ jobs:
           distribution: temurin
           java-version: 17
       # El SDK de Android ya viene instalado en los servidores de GitHub ($ANDROID_HOME).
+      # La clave de firma vive en los Secrets del repositorio, nunca en el código.
+      - name: Preparar la clave
+        id: clave
+        env:
+          KEYSTORE_B64: ${{ secrets.YTTONP_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/yttonp.jks"
+            echo "firmar=si" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Sin el Secret YTTONP_KEYSTORE_B64: se compila sin firmar y no se publica."
+            echo "firmar=no" >> "$GITHUB_OUTPUT"
+          fi
       - name: Compilar
+        env:
+          YTTONP_KEYSTORE: ${{ steps.clave.outputs.firmar == 'si' && format('{0}/yttonp.jks', runner.temp) || '' }}
+          YTTONP_KEYSTORE_PASSWORD: ${{ secrets.YTTONP_KEYSTORE_PASSWORD }}
+          YTTONP_KEY_ALIAS: yttonp
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           chmod +x gradlew
+          [ -n "$YTTONP_KEYSTORE" ] || unset YTTONP_KEYSTORE
           ./gradlew --no-daemon assembleRelease
       - name: Renombrar APK
+        if: steps.clave.outputs.firmar == 'si'
         run: cp app/build/outputs/apk/release/app-release.apk YT2NewPipe.apk
       - uses: actions/upload-artifact@v5
+        if: steps.clave.outputs.firmar == 'si'
         with:
           name: YT2NewPipe-apk
           path: YT2NewPipe.apk
       # Publica el APK como descarga directa en la sección "Releases" (siempre la última versión).
       - name: Publicar descarga
+        if: steps.clave.outputs.firmar == 'si' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

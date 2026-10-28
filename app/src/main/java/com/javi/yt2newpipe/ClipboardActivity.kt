@@ -69,7 +69,7 @@ class ClipboardActivity : Activity() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             try {
                 startActivity(i)
-                Log.i(YtInterceptService.TAG, "Abierto en $pkg: $url")
+                Log.i(YtInterceptService.TAG, "Abierto en $pkg")
                 finishWith(true, null)
                 return
             } catch (_: ActivityNotFoundException) { }
